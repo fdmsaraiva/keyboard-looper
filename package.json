@@ -1,0 +1,37 @@
+{
+  "name": "piano-loop-station",
+  "version": "0.1.0",
+  "description": "A loop station fed by an embedded piano keyboard",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "fetch-soundfont": "node scripts/fetch-soundfont.mjs",
+    "dev": "vite",
+    "build": "npm run fetch-soundfont && tsc && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc",
+    "test": "vitest run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fdmsaraiva/keyboard-looper.git"
+  },
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/fdmsaraiva/keyboard-looper/issues"
+  },
+  "homepage": "https://github.com/fdmsaraiva/keyboard-looper#readme",
+  "dependencies": {
+    "preact": "^10.29.8",
+    "spessasynth_lib": "^4.3.14"
+  },
+  "devDependencies": {
+    "@preact/preset-vite": "^2.10.6",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  },
+  "private": true,
+  "type": "module"
+}
