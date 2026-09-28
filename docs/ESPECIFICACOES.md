@@ -341,7 +341,7 @@ O histórico de undo e redo **fica guardado com a ideia** *(Q22b)*.
 2. **Memória** da soundfont SF3: confirmar que só os instrumentos em uso são descomprimidos.
 3. **Qualidade** do piano, baixo, bateria e sintetizadores da MuseScore_General, comparada com outras soundfonts.
 4. **Limite de estabilidade** de camadas e da polifonia no Pixel 6 Pro.
-5. **Verificação de chaves de licença a partir do browser** (restrições CORS), para o canal que for escolhido.
+5. **Verificação de chaves de licença a partir do browser:** já testado para o Gumroad e o Lemon Squeezy, que aceitam pedidos directos do browser. Falta testar o canal que vier a ser escolhido, se for outro.
 6. **Codificação M4A no browser.** Se não estiver disponível num browser, esse browser usa WAV.
 
 ---
