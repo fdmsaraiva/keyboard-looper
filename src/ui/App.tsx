@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks'
 import { AudioEngine, MAX_LAYERS } from '../audio/engine'
 import { type Instrument, type Layer, Looper } from '../model/looper'
+import { keyHints, useComputerKeyboard } from './computerKeyboard'
 import { InstrumentSelect } from './InstrumentSelect'
 import { Keyboard } from './Keyboard'
 import { TOTAL_WHITES, whiteIndex } from './keys'
@@ -34,6 +35,9 @@ export function App() {
   const [view, setView] = useState({ start: whiteIndex(48), whites: 15 }) // C3 upward, ~2 octaves
   const [maxWhites, setMaxWhites] = useState(TOTAL_WHITES)
   const [loadSeconds, setLoadSeconds] = useState(0)
+  const [kbBase, setKbBase] = useState(48) // computer keyboard lower row starts at C3
+  const [kbDown, setKbDown] = useState<ReadonlySet<number>>(new Set())
+  const finePointer = useMemo(() => matchMedia('(pointer: fine)').matches, [])
 
   useEffect(() => looper.subscribe(rerender), [looper])
 
@@ -98,6 +102,37 @@ export function App() {
     setSustain(next)
     engine.liveSustain(next)
   }
+
+  useComputerKeyboard(phase.kind === 'running', kbBase, {
+    noteOn: (p, v) => {
+      engine.liveNoteOn(p, v)
+      setKbDown((d) => new Set(d).add(p))
+    },
+    noteOff: (p) => {
+      engine.liveNoteOff(p)
+      setKbDown((d) => {
+        const next = new Set(d)
+        next.delete(p)
+        return next
+      })
+    },
+    octave: (base) => {
+      setKbBase(base)
+      // Bring the two computer-keyboard octaves into view.
+      setView((v) => {
+        const lo = whiteIndex(base)
+        const hi = whiteIndex(Math.min(108, base + 24))
+        if (lo >= v.start && hi <= v.start + v.whites) return v
+        return { ...v, start: Math.max(0, Math.min(TOTAL_WHITES - v.whites, lo)) }
+      })
+    },
+    rec: () => looper.rec(instrument, engine.now),
+    playStop: () => (looper.state === 'stopped' ? looper.play(engine.now) : looper.stop(engine.now)),
+    cancel: () => looper.cancel(),
+    undo: () => looper.undo(),
+    redo: () => looper.redo(),
+    sustain: toggleSustain,
+  })
 
   // Leaving the app stops playback and cancels a recording (spec §18).
   const stateRef = useRef(looper)
@@ -190,7 +225,21 @@ export function App() {
         maxWhites={maxWhites}
         onChange={(start, whites) => setView({ start, whites })}
       />
-      <Keyboard startWhite={view.start} visibleWhites={view.whites} drums={instrument.drums} onNoteOn={noteOn} onNoteOff={noteOff} />
+      {finePointer && (
+        <div class="kb-help">
+          Computer keys: Z–M and Q–P play · ←/→ octave · Enter Rec · Space Play/Stop · Esc Cancel · Tab Sustain · Ctrl+Z / Ctrl+Shift+Z
+          undo/redo rec
+        </div>
+      )}
+      <Keyboard
+        startWhite={view.start}
+        visibleWhites={view.whites}
+        drums={instrument.drums}
+        externalDown={kbDown}
+        hints={finePointer ? keyHints(kbBase) : undefined}
+        onNoteOn={noteOn}
+        onNoteOff={noteOff}
+      />
     </div>
   )
 }

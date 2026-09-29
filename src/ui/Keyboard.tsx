@@ -7,6 +7,10 @@ interface Props {
   /** Number of white keys that fit in the width. */
   visibleWhites: number
   drums: boolean
+  /** Pitches held by other inputs (computer keyboard), shown pressed. */
+  externalDown?: ReadonlySet<number>
+  /** Small labels per pitch, e.g. the computer key that plays it. */
+  hints?: Record<number, string>
   onNoteOn: (pitch: number, velocity: number) => void
   onNoteOff: (pitch: number) => void
 }
@@ -18,7 +22,7 @@ const MIN_VELOCITY = 30
  * sliding a finger across keys plays a glissando. Velocity comes from how far
  * down the key the finger lands (nearer the player = louder).
  */
-export function Keyboard({ startWhite, visibleWhites, drums, onNoteOn, onNoteOff }: Props) {
+export function Keyboard({ startWhite, visibleWhites, drums, externalDown, hints, onNoteOn, onNoteOff }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
   const [down, setDown] = useState<ReadonlySet<number>>(new Set())
@@ -95,9 +99,10 @@ export function Keyboard({ startWhite, visibleWhites, drums, onNoteOn, onNoteOff
             <div
               key={k.pitch}
               data-pitch={k.pitch}
-              class={`key ${k.black ? 'black' : 'white'}${down.has(k.pitch) ? ' down' : ''}`}
+              class={`key ${k.black ? 'black' : 'white'}${down.has(k.pitch) || externalDown?.has(k.pitch) ? ' down' : ''}`}
               style={{ left: `${left}px`, width: `${k.black ? ww * 0.6 : ww}px` }}
             >
+              {hints?.[k.pitch] && <span class="hint-key">{hints[k.pitch]}</span>}
               {label && <span class="label">{label}</span>}
             </div>
           )
