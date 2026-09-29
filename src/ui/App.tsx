@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'p
 import { AudioEngine, MAX_LAYERS } from '../audio/engine'
 import { type Instrument, type Layer, Looper } from '../model/looper'
 import { keyHints, useComputerKeyboard } from './computerKeyboard'
-import { InstrumentSelect } from './InstrumentSelect'
+import { InstrumentSelect, instrumentKey } from './InstrumentSelect'
 import { Keyboard } from './Keyboard'
 import { TOTAL_WHITES, whiteIndex } from './keys'
 import { LoopStrip, layerColor } from './LoopStrip'
@@ -21,11 +21,12 @@ const DEFAULT_INSTRUMENT: Instrument = { program: 0, bankMSB: 0, drums: false, n
 const MIN_KEY_PX_TOUCH = 26
 const MIN_KEY_PX_MOUSE = 12
 
-type Phase = { kind: 'loading'; progress: number } | { kind: 'ready' } | { kind: 'running' } | { kind: 'error'; message: string }
+type Phase = { kind: 'loading'; progress: number } | { kind: 'preparing' } | { kind: 'ready' } | { kind: 'running' } | { kind: 'error'; message: string }
 
 export function App() {
   const looper = useMemo(() => new Looper(MAX_LAYERS), [])
   const engine = useMemo(() => new AudioEngine(looper), [looper])
+  ;(window as unknown as { __engine: AudioEngine }).__engine = engine // prototype diagnostics
   const [, bump] = useReducer((n: number) => n + 1, 0)
   const rerender = useCallback(() => bump(undefined), [])
   const [phase, setPhase] = useState<Phase>({ kind: 'loading', progress: 0 })
@@ -47,10 +48,14 @@ export function App() {
       .load(SOUNDFONT_URLS, (progress) => setPhase({ kind: 'loading', progress }))
       .then(() => {
         setLoadSeconds((performance.now() - t0) / 1000)
+        engine.onPreparedChange = rerender
         const piano = engine.presets.find((p) => !p.drums && p.program === 0 && p.bankMSB === 0)
-        if (piano) setInstrument({ ...piano })
-        setPhase({ kind: 'ready' })
+        const first = piano ? { ...piano } : DEFAULT_INSTRUMENT
+        setInstrument(first)
+        setPhase({ kind: 'preparing' })
+        return engine.prepare(first)
       })
+      .then(() => setPhase({ kind: 'ready' }))
       .catch((e: Error) => setPhase({ kind: 'error', message: e.message }))
   }, [engine])
 
@@ -90,6 +95,7 @@ export function App() {
 
   const chooseInstrument = (i: Instrument) => {
     setInstrument(i)
+    void engine.prepare(i).catch(() => {})
     if (i.drums) setView((v) => ({ ...v, start: Math.max(0, whiteIndex(35) - 1) }))
   }
 
@@ -153,6 +159,7 @@ export function App() {
         <h1>Piano Loop Station</h1>
         <p class="sub">Prototype</p>
         {phase.kind === 'loading' && <p>Loading sounds… {Math.round(phase.progress * 100)}%</p>}
+        {phase.kind === 'preparing' && <p>Preparing the piano… (slower the first time on each device)</p>}
         {phase.kind === 'error' && <p class="error">{phase.message}</p>}
         {phase.kind === 'ready' && (
           <button type="button" class="big" onClick={start}>
@@ -166,6 +173,8 @@ export function App() {
   const s = looper.state
   const recording = looper.isRecording
   const lat = engine.latencyMs
+  const inputDelay = engine.inputDelayMs
+  const preparingNames = engine.presets.filter((p) => engine.preparing.has(instrumentKey(p))).map((p) => p.name)
   const mem = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory
 
   return (
@@ -202,8 +211,9 @@ export function App() {
         <InstrumentSelect presets={engine.presets} value={instrument} onChange={chooseInstrument} />
         <span class="info">
           {stateLabel(s)} · {looper.layers.length}/{MAX_LAYERS} layers
-          {looper.loopLength ? ` · ${looper.loopLength.toFixed(2)} s` : ''} · latency {lat.base}+{lat.output} ms · voices{' '}
+          {looper.loopLength ? ` · ${looper.loopLength.toFixed(2)} s` : ''} · audio latency {lat.base}+{lat.output} ms{inputDelay !== null ? ` · touch→app ${inputDelay} ms` : ''} · voices{' '}
           {engine.voiceCount} · load {loadSeconds.toFixed(1)} s{mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1e6)} MB` : ''}
+          {preparingNames.length > 0 && <strong class="preparing"> · Preparing {preparingNames.join(', ')}…</strong>}
         </span>
       </div>
 
@@ -239,6 +249,7 @@ export function App() {
         hints={finePointer ? keyHints(kbBase) : undefined}
         onNoteOn={noteOn}
         onNoteOff={noteOff}
+        onInputDelay={(ms) => engine.recordInputDelay(ms)}
       />
     </div>
   )

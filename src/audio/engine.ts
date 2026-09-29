@@ -4,6 +4,8 @@
 import { WorkletSynthesizer } from 'spessasynth_lib'
 import workletUrl from 'spessasynth_lib/dist/spessasynth_processor.min.js?url'
 import type { Instrument, Layer, Looper } from '../model/looper'
+import type { DecoderRequest, DecoderResponse } from './decoder.worker'
+import { getCachedPreset, putCachedPreset } from './presetCache'
 
 const LIVE_CHANNEL = 0
 /** Channel 0 is the live keyboard; each layer gets one of the remaining 15. */
@@ -15,6 +17,9 @@ const CC_BANK = 0
 const CC_VOLUME = 7
 const CC_SUSTAIN = 64
 const CC_ALL_NOTES_OFF = 123
+/** Bump when the embedded soundfont changes, so cached decoded presets are not reused. */
+const SOUNDFONT_ID = 'MuseScore_General-0.2'
+const MAIN_BANK = 'main'
 
 export interface Preset {
   program: number
@@ -35,6 +40,14 @@ export class AudioEngine {
   private lastLoopStart = Number.NaN
   private wasPlaying = false
   private timer: number | undefined
+  private decoder: Worker | null = null
+  private decoderReady: Promise<void> | null = null
+  private soundfont: ArrayBuffer | null = null
+  private pending = new Map<string, { resolve: (b: ArrayBuffer) => void; reject: (e: Error) => void }>()
+  private prepared = new Map<string, Promise<void>>()
+  /** Instruments currently being prepared (for the UI). */
+  preparing = new Set<string>()
+  onPreparedChange: () => void = () => {}
 
   constructor(private looper: Looper) {
     this.ctx = new AudioContext({ latencyHint: 'interactive' })
@@ -46,9 +59,10 @@ export class AudioEngine {
       fetchAllWithProgress(soundfontUrls, onProgress),
       this.ctx.audioWorklet.addModule(workletUrl),
     ])
+    this.soundfont = bank.slice(0) // the worklet takes its own copy; keep one for the decoder
     this.synth = new WorkletSynthesizer(this.ctx)
     this.synth.connect(this.ctx.destination)
-    await this.synth.soundBankManager.addSoundBank(bank, 'main')
+    await this.synth.soundBankManager.addSoundBank(bank, MAIN_BANK)
     await this.synth.isReady
     this.presets = this.synth.presetList
       .map((p) => ({ program: p.program, bankMSB: p.bankMSB, drums: p.isDrum, name: p.name.trim() }))
@@ -72,8 +86,115 @@ export class AudioEngine {
     }
   }
 
+  /** Recent delays between a touch/key event and the app handling it (ms). */
+  private inputDelays: number[] = []
+
+  recordInputDelay(ms: number) {
+    this.inputDelays.push(ms)
+    if (this.inputDelays.length > 20) this.inputDelays.shift()
+  }
+
+  get inputDelayMs(): number | null {
+    if (!this.inputDelays.length) return null
+    return Math.round(this.inputDelays.reduce((a, b) => a + b, 0) / this.inputDelays.length)
+  }
+
   get voiceCount(): number {
     return this.synth?.voiceCount ?? 0
+  }
+
+  // --- instrument preparation ----------------------------------------------
+
+  isPrepared(inst: Instrument): boolean {
+    const key = presetKey(inst)
+    return this.prepared.has(key) && !this.preparing.has(key)
+  }
+
+  /**
+   * Makes sure an instrument's samples are decoded before they are played, so
+   * no decoding happens on the audio thread. Uses the on-device cache when possible.
+   */
+  prepare(inst: Instrument): Promise<void> {
+    const key = presetKey(inst)
+    let done = this.prepared.get(key)
+    if (done) return done
+    this.preparing.add(key)
+    this.onPreparedChange()
+    done = (async () => {
+      const cacheKey = `${SOUNDFONT_ID}:${key}`
+      let buffer = await getCachedPreset(cacheKey)
+      if (!buffer) {
+        buffer = await this.decode(key, inst)
+        await putCachedPreset(cacheKey, buffer.slice(0))
+      }
+      await this.synth.soundBankManager.addSoundBank(buffer, key)
+      // Decoded presets take priority over the compressed main bank.
+      this.synth.soundBankManager.priorityOrder = [
+        ...this.synth.soundBankManager.priorityOrder.filter((id) => id !== MAIN_BANK),
+        MAIN_BANK,
+      ]
+      // Re-send program changes so channels pick up the decoded preset.
+      for (const [ch, k] of this.channelInstrument) if (k === key) this.channelInstrument.delete(ch)
+      this.preparing.delete(key)
+      this.onPreparedChange()
+    })().catch((err) => {
+      this.prepared.delete(key)
+      this.preparing.delete(key)
+      this.onPreparedChange()
+      throw err
+    })
+    this.prepared.set(key, done)
+    return done
+  }
+
+  private decoderIdle: number | undefined
+
+  /** The worker keeps decoded audio in memory; release it once nothing is pending for a while. */
+  private scheduleDecoderShutdown() {
+    clearTimeout(this.decoderIdle)
+    this.decoderIdle = window.setTimeout(() => {
+      if (this.pending.size > 0) return
+      this.decoder?.terminate()
+      this.decoder = null
+      this.decoderReady = null
+    }, 15000)
+  }
+
+  private decode(key: string, inst: Instrument): Promise<ArrayBuffer> {
+    clearTimeout(this.decoderIdle)
+    if (!this.decoder) {
+      this.decoder = new Worker(new URL('./decoder.worker.ts', import.meta.url), { type: 'module' })
+      this.decoder.onmessage = (e: MessageEvent<DecoderResponse>) => {
+        const msg = e.data
+        if (msg.type === 'prepared') {
+          this.pending.get(msg.key)?.resolve(msg.buffer)
+          this.pending.delete(msg.key)
+          this.scheduleDecoderShutdown()
+        } else if (msg.type === 'error' && msg.key) {
+          this.pending.get(msg.key)?.reject(new Error(msg.message))
+          this.pending.delete(msg.key)
+        }
+      }
+      const ready = new Promise<void>((resolve) => {
+        const onReady = (e: MessageEvent<DecoderResponse>) => {
+          if (e.data.type !== 'ready') return
+          this.decoder?.removeEventListener('message', onReady)
+          resolve()
+        }
+        this.decoder!.addEventListener('message', onReady)
+      })
+      const init: DecoderRequest = { type: 'init', buffer: this.soundfont!.slice(0) }
+      this.decoder.postMessage(init, [init.buffer])
+      this.decoderReady = ready
+    }
+    return this.decoderReady!.then(
+      () =>
+        new Promise<ArrayBuffer>((resolve, reject) => {
+          this.pending.set(key, { resolve, reject })
+          const req: DecoderRequest = { type: 'prepare', key, program: inst.program, bankMSB: inst.bankMSB, drums: inst.drums }
+          this.decoder!.postMessage(req)
+        }),
+    )
   }
 
   // --- live playing --------------------------------------------------------
@@ -167,11 +288,12 @@ export class AudioEngine {
       this.channelOf.set(layer.id, ch)
     }
     this.applyInstrument(ch, layer.instrument)
+    void this.prepare(layer.instrument).catch(() => {})
     return ch
   }
 
   private applyInstrument(ch: number, inst: Instrument) {
-    const key = `${inst.drums}:${inst.bankMSB}:${inst.program}`
+    const key = presetKey(inst)
     if (this.channelInstrument.get(ch) === key) return
     this.channelInstrument.set(ch, key)
     this.synth.midiChannels[ch].setDrums(inst.drums)
@@ -200,6 +322,8 @@ export class AudioEngine {
     }
   }
 }
+
+const presetKey = (i: Instrument) => `${i.drums ? 'd' : 'm'}:${i.bankMSB}:${i.program}`
 
 async function fetchAllWithProgress(urls: string[], onProgress: (f: number) => void): Promise<ArrayBuffer> {
   const responses = await Promise.all(urls.map((u) => fetch(u)))

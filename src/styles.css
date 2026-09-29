@@ -341,3 +341,7 @@ select.instrument {
 .key.black .hint-key {
   top: 55%;
 }
+
+.preparing {
+  color: var(--sus);
+}

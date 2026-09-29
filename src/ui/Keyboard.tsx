@@ -13,6 +13,8 @@ interface Props {
   hints?: Record<number, string>
   onNoteOn: (pitch: number, velocity: number) => void
   onNoteOff: (pitch: number) => void
+  /** Delay (ms) between the touch event and its handling, for diagnostics. */
+  onInputDelay?: (ms: number) => void
 }
 
 const MIN_VELOCITY = 30
@@ -22,7 +24,7 @@ const MIN_VELOCITY = 30
  * sliding a finger across keys plays a glissando. Velocity comes from how far
  * down the key the finger lands (nearer the player = louder).
  */
-export function Keyboard({ startWhite, visibleWhites, drums, externalDown, hints, onNoteOn, onNoteOff }: Props) {
+export function Keyboard({ startWhite, visibleWhites, drums, externalDown, hints, onNoteOn, onNoteOff, onInputDelay }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
   const [down, setDown] = useState<ReadonlySet<number>>(new Set())
@@ -82,6 +84,7 @@ export function Keyboard({ startWhite, visibleWhites, drums, externalDown, hints
         e.preventDefault()
         ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
         press(e.pointerId, e.clientX, e.clientY)
+        onInputDelay?.(performance.now() - e.timeStamp)
       }}
       onPointerMove={(e) => {
         if (pointers.current.has(e.pointerId)) press(e.pointerId, e.clientX, e.clientY)
