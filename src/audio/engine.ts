@@ -133,8 +133,11 @@ export class AudioEngine {
         ...this.synth.soundBankManager.priorityOrder.filter((id) => id !== MAIN_BANK),
         MAIN_BANK,
       ]
-      // Re-send program changes so channels pick up the decoded preset.
-      for (const [ch, k] of this.channelInstrument) if (k === key) this.channelInstrument.delete(ch)
+      // Changing the bank stack makes the synthesizer reset every channel
+      // (program, bank, drums, volume, sustain), so re-send all channel state.
+      this.channelInstrument.clear()
+      this.channelVolume.clear()
+      this.restoreLiveChannel()
       this.preparing.delete(key)
       this.onPreparedChange()
     })().catch((err) => {
@@ -199,8 +202,17 @@ export class AudioEngine {
 
   // --- live playing --------------------------------------------------------
 
+  private liveInstrument: Instrument | null = null
+  private liveSustainDown = false
+
   setLiveInstrument(instrument: Instrument) {
+    this.liveInstrument = instrument
     this.applyInstrument(LIVE_CHANNEL, instrument)
+  }
+
+  private restoreLiveChannel() {
+    if (this.liveInstrument) this.applyInstrument(LIVE_CHANNEL, this.liveInstrument)
+    if (this.liveSustainDown) this.synth.controllerChange(LIVE_CHANNEL, CC_SUSTAIN, 127)
   }
 
   liveNoteOn(pitch: number, velocity: number) {
@@ -214,6 +226,7 @@ export class AudioEngine {
   }
 
   liveSustain(down: boolean) {
+    this.liveSustainDown = down
     this.synth.controllerChange(LIVE_CHANNEL, CC_SUSTAIN, down ? 127 : 0)
     this.looper.sustain(down, this.now)
   }
@@ -239,11 +252,17 @@ export class AudioEngine {
     }
     const now = this.now
     if (!this.wasPlaying || l.loopStart !== this.lastLoopStart) {
-      this.scheduledUntil = Math.max(now, l.loopStart)
+      // Start from the beginning of the current cycle, even if it began a few
+      // milliseconds before this tick (e.g. right when the first loop is closed),
+      // so its first notes are not skipped. Earlier cycles were heard live.
+      const len = l.loopLength!
+      const cycles = Math.max(0, Math.floor((now - l.loopStart) / len))
+      this.scheduledUntil = l.loopStart + cycles * len
       this.lastLoopStart = l.loopStart
     }
     this.wasPlaying = true
-    const from = Math.max(this.scheduledUntil, now)
+    // Never replay more than a moment of backlog (e.g. after the tab was throttled).
+    const from = Math.max(this.scheduledUntil, now - 0.2)
     const to = now + LOOKAHEAD
     if (to <= from) return
     this.releaseUnusedChannels()
