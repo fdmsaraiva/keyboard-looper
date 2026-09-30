@@ -337,8 +337,8 @@ O histórico de undo e redo **fica guardado com a ideia** *(Q22b)*.
 
 ## 21. A verificar no protótipo
 
-1. **Latência** entre tocar e ouvir no Chrome do Pixel 6 Pro.
-2. **Memória** da soundfont SF3: confirmar que só os instrumentos em uso são descomprimidos.
+1. **Latência** entre tocar e ouvir no Chrome do Pixel 6 Pro. **Resultado:** aceitável no Chrome, com o atraso do toque à app entre 10 e 17 ms. Fica ligeiramente acima de uma app nativa (Mini Piano Pro), o que se nota em notas muito rápidas. Aberta dentro da app do Claude, a latência sobe para cerca de 100 ms, por isso os testes são feitos pelo GitHub Pages. As amostras de som não têm silêncio inicial que contribua para o atraso.
+2. **Memória** da soundfont SF3. **Resultado:** o motor descomprimia os sons no próprio processo de áudio, o que cortava a primeira nota. Passou a ser feito em segundo plano, com cache no dispositivo. O piano da MuseScore_General ocupa cerca de 100 MB descomprimido e demora vários segundos a preparar na primeira utilização. Os outros instrumentos ocupam entre 1 e 6 MB. Candidato a substituição por um piano mais leve.
 3. **Qualidade** do piano, baixo, bateria e sintetizadores da MuseScore_General, comparada com outras soundfonts.
 4. **Limite de estabilidade** de camadas e da polifonia no Pixel 6 Pro.
 5. **Verificação de chaves de licença a partir do browser:** já testado para o Gumroad e o Lemon Squeezy, que aceitam pedidos directos do browser. Falta testar o canal que vier a ser escolhido, se for outro.
