@@ -15,6 +15,8 @@ const LOOKAHEAD = 0.12
 const TICK_MS = 25
 const CC_BANK = 0
 const CC_VOLUME = 7
+/** Channel volume for 100% — the MIDI default the live keyboard also uses, so layers play back as loud as they were played. */
+const FULL_VOLUME = 100
 const CC_SUSTAIN = 64
 const CC_ALL_NOTES_OFF = 123
 /** Bump when the embedded soundfont changes, so cached decoded presets are not reused. */
@@ -207,10 +209,12 @@ export class AudioEngine {
 
   setLiveInstrument(instrument: Instrument) {
     this.liveInstrument = instrument
+    this.synth.controllerChange(LIVE_CHANNEL, CC_VOLUME, FULL_VOLUME)
     this.applyInstrument(LIVE_CHANNEL, instrument)
   }
 
   private restoreLiveChannel() {
+    this.synth.controllerChange(LIVE_CHANNEL, CC_VOLUME, FULL_VOLUME)
     if (this.liveInstrument) this.applyInstrument(LIVE_CHANNEL, this.liveInstrument)
     if (this.liveSustainDown) this.synth.controllerChange(LIVE_CHANNEL, CC_SUSTAIN, 127)
   }
@@ -274,7 +278,7 @@ export class AudioEngine {
     const l = this.looper
     const len = l.loopLength!
     const ch = this.channelFor(layer)
-    const vol = Math.round(layer.volume * 127)
+    const vol = Math.round(layer.volume * FULL_VOLUME)
     if (this.channelVolume.get(ch) !== vol) {
       this.synth.controllerChange(ch, CC_VOLUME, vol)
       this.channelVolume.set(ch, vol)
