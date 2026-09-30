@@ -1,24 +1,51 @@
 // Computer keyboard as a piano (spec §15). Keys are matched by physical
 // position (KeyboardEvent.code), so the layout works on any keyboard language.
+// Each row continues to its right end, so the two rows overlap by a few notes:
 //
-//   lower octave:  Z S X D C V G B H N J M ,     →  C … C (base octave)
-//   upper octave:  Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P  →  C … E (base + 1)
+//   lower:  Z S X D C V G B H N J M , L . ; /          →  C … E  (base … base + 16)
+//   upper:  Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P [ = ]    →  C … G  (base + 12 … base + 31)
 //
+// (Characters as on a US layout; other layouts use the keys in the same places.)
 // The base follows the on-screen keyboard: Z is the lowest C fully visible.
 
-import { useEffect, useRef } from 'preact/hooks'
+import { useEffect, useRef, useState } from 'preact/hooks'
 import { HIGHEST, LOWEST, whiteIndex } from './keys'
 
-const LOWER_ROW = ['KeyZ', 'KeyS', 'KeyX', 'KeyD', 'KeyC', 'KeyV', 'KeyG', 'KeyB', 'KeyH', 'KeyN', 'KeyJ', 'KeyM', 'Comma']
-const UPPER_ROW = ['KeyQ', 'Digit2', 'KeyW', 'Digit3', 'KeyE', 'KeyR', 'Digit5', 'KeyT', 'Digit6', 'KeyY', 'Digit7', 'KeyU', 'KeyI', 'Digit9', 'KeyO', 'Digit0', 'KeyP']
+/** Semitone offset from the base C for every playing key. */
+const OFFSETS: Record<string, number> = {
+  // lower row (white keys) with the home row above it (black keys)
+  KeyZ: 0, KeyS: 1, KeyX: 2, KeyD: 3, KeyC: 4, KeyV: 5, KeyG: 6, KeyB: 7, KeyH: 8, KeyN: 9, KeyJ: 10, KeyM: 11,
+  Comma: 12, KeyL: 13, Period: 14, Semicolon: 15, Slash: 16,
+  // upper row (white keys) with the number row above it (black keys)
+  KeyQ: 12, Digit2: 13, KeyW: 14, Digit3: 15, KeyE: 16, KeyR: 17, Digit5: 18, KeyT: 19, Digit6: 20, KeyY: 21,
+  Digit7: 22, KeyU: 23, KeyI: 24, Digit9: 25, KeyO: 26, Digit0: 27, KeyP: 28, BracketLeft: 29, Equal: 30, BracketRight: 31,
+}
+
+const US_LABELS: Record<string, string> = {
+  Comma: ',', Period: '.', Semicolon: ';', Slash: '/', BracketLeft: '[', Equal: '=', BracketRight: ']',
+}
 
 export const COMPUTER_KEY_VELOCITY = 100
 
-/** Letter shown on each on-screen key that a computer key plays, for the given base. */
-export function keyHints(base: number): Record<number, string> {
-  const label = (code: string) => (code === 'Comma' ? ',' : code.replace(/^(Key|Digit)/, ''))
+const defaultLabel = (code: string) => US_LABELS[code] ?? code.replace(/^(Key|Digit)/, '')
+
+/**
+ * Labels for the playing keys as printed on this computer's keyboard, where the
+ * browser can tell (Chrome/Edge); otherwise US-layout characters.
+ */
+export function useKeyLabels(): (code: string) => string {
+  const [layout, setLayout] = useState<Map<string, string> | null>(null)
+  useEffect(() => {
+    const kb = (navigator as Navigator & { keyboard?: { getLayoutMap?: () => Promise<Map<string, string>> } }).keyboard
+    kb?.getLayoutMap?.().then(setLayout, () => {})
+  }, [])
+  return (code) => (layout?.get(code) ?? defaultLabel(code)).toUpperCase()
+}
+
+/** Label shown on each on-screen key that a computer key plays, for the given base. */
+export function keyHints(base: number, label: (code: string) => string = defaultLabel): Record<number, string> {
   const hints: Record<number, string> = {}
-  for (const code of [...LOWER_ROW, ...UPPER_ROW]) {
+  for (const code of Object.keys(OFFSETS)) {
     const pitch = pitchForCode(code, base)
     if (pitch !== null) hints[pitch] = pitch in hints ? `${hints[pitch]}/${label(code)}` : label(code)
   }
@@ -37,12 +64,8 @@ export function baseForView(startWhite: number): number {
 
 /** MIDI pitch for a key code with the lower row starting at `base` (a C), or null. */
 export function pitchForCode(code: string, base: number): number | null {
-  let offset = LOWER_ROW.indexOf(code)
-  if (offset < 0) {
-    const upper = UPPER_ROW.indexOf(code)
-    if (upper < 0) return null
-    offset = 12 + upper
-  }
+  const offset = OFFSETS[code]
+  if (offset === undefined) return null
   const pitch = base + offset
   return pitch >= LOWEST && pitch <= HIGHEST ? pitch : null
 }
@@ -76,7 +99,7 @@ export function useComputerKeyboard(enabled: boolean, base: number, actions: Com
     const held = new Map<string, number>()
 
     const releaseAll = () => {
-      for (const pitch of held.values()) ref.current.actions.noteOff(pitch)
+      for (const pitch of new Set(held.values())) ref.current.actions.noteOff(pitch)
       held.clear()
     }
 
@@ -98,8 +121,10 @@ export function useComputerKeyboard(enabled: boolean, base: number, actions: Com
       if (pitch !== null) {
         e.preventDefault()
         if (e.repeat || held.has(e.code)) return
+        // Both rows can play the same note; only the first key down sounds it.
+        const alreadyHeld = [...held.values()].includes(pitch)
         held.set(e.code, pitch)
-        a.noteOn(pitch, COMPUTER_KEY_VELOCITY)
+        if (!alreadyHeld) a.noteOn(pitch, COMPUTER_KEY_VELOCITY)
         return
       }
 
@@ -122,7 +147,7 @@ export function useComputerKeyboard(enabled: boolean, base: number, actions: Com
       const pitch = held.get(e.code)
       if (pitch === undefined) return
       held.delete(e.code)
-      ref.current.actions.noteOff(pitch)
+      if (![...held.values()].includes(pitch)) ref.current.actions.noteOff(pitch)
     }
 
     window.addEventListener('keydown', onDown)

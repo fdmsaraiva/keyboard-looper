@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks'
 import { AudioEngine, MAX_LAYERS } from '../audio/engine'
 import { type Instrument, type Layer, Looper } from '../model/looper'
-import { baseForView, keyHints, MAX_BASE, MIN_BASE, useComputerKeyboard } from './computerKeyboard'
+import { baseForView, keyHints, MAX_BASE, MIN_BASE, useComputerKeyboard, useKeyLabels } from './computerKeyboard'
 import { InstrumentSelect, instrumentKey } from './InstrumentSelect'
 import { Keyboard } from './Keyboard'
 import { TOTAL_WHITES, whiteIndex } from './keys'
@@ -110,6 +110,7 @@ export function App() {
 
   // Z plays the lowest C visible on screen (spec §15).
   const kbBase = baseForView(view.start)
+  const keyLabel = useKeyLabels()
   useComputerKeyboard(phase.kind === 'running', kbBase, {
     noteOn: (p, v) => {
       engine.liveNoteOn(p, v)
@@ -233,7 +234,7 @@ export function App() {
       />
       {finePointer && (
         <div class="kb-help">
-          Computer keys: Z = lowest C on screen, Z–M and Q–P play · ←/→ scroll an octave · Enter Rec · Space Play/Stop · Esc Cancel · Tab Sustain · Ctrl+Z / Ctrl+Shift+Z
+          Computer keys: Z = lowest C on screen; the two letter rows play up to their right end · ←/→ scroll an octave · Enter Rec · Space Play/Stop · Esc Cancel · Tab Sustain · Ctrl+Z / Ctrl+Shift+Z
           undo/redo rec
         </div>
       )}
@@ -242,7 +243,7 @@ export function App() {
         visibleWhites={view.whites}
         drums={instrument.drums}
         externalDown={kbDown}
-        hints={finePointer ? keyHints(kbBase) : undefined}
+        hints={finePointer ? keyHints(kbBase, keyLabel) : undefined}
         onNoteOn={noteOn}
         onNoteOff={noteOff}
         onInputDelay={(ms) => engine.recordInputDelay(ms)}

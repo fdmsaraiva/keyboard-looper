@@ -16,6 +16,14 @@ describe('pitchForCode', () => {
     expect(pitchForCode('KeyP', 48)).toBe(76) // E5
   })
 
+  it('continues both rows to their right end, overlapping', () => {
+    expect(pitchForCode('KeyL', 48)).toBe(61) // C#4, same as Digit2
+    expect(pitchForCode('Slash', 48)).toBe(64) // E4, same as KeyE
+    expect(pitchForCode('BracketLeft', 48)).toBe(77) // F5
+    expect(pitchForCode('Equal', 48)).toBe(78) // F#5
+    expect(pitchForCode('BracketRight', 48)).toBe(79) // G5
+  })
+
   it('ignores unmapped keys and pitches outside the piano', () => {
     expect(pitchForCode('KeyA', 48)).toBeNull()
     expect(pitchForCode('KeyP', 96)).toBeNull() // above C8
