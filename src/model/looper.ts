@@ -1,7 +1,9 @@
 // Pure looper model: recording state machine, layers and undo/redo history.
 // All times are in seconds on the audio clock supplied by the caller, so the
 // model can be unit-tested without an AudioContext. See docs/ESPECIFICACOES.md
-// §5–§7 for the behaviour this implements.
+// §5–§11 for the behaviour this implements.
+
+import { barSeconds, beatSeconds, type Grid, guessQuantizeGrid, type QuantizeGrid, quantizeNotes, stepSeconds } from './timing'
 
 export interface Instrument {
   program: number
@@ -10,7 +12,7 @@ export interface Instrument {
   name: string
 }
 
-/** A recorded note. `start` is a loop position in [0, loopLength); `dur` ≤ loopLength. */
+/** A recorded note. `start` is a position in [0, layer length); `dur` ≤ layer length. */
 export interface Note {
   pitch: number
   velocity: number
@@ -26,17 +28,22 @@ export interface SustainSpan {
 
 export interface Layer {
   id: number
+  /** The layer repeats every `length` seconds: a whole number of base loops (spec §11). */
+  length: number
   instrument: Instrument
   notes: Note[]
   sustain: SustainSpan[]
   volume: number // 0..1
   muted: boolean
   solo: boolean
+  /** Applied on playback only; the notes keep the timing as played. */
+  quantize: { on: boolean; grid: QuantizeGrid }
 }
 
 export type LooperState =
   | 'empty' // no visible layers, not recording
-  | 'armed' // first recording requested, waiting for the first note
+  | 'armed' // first recording requested (free timing), waiting for the first note
+  | 'countIn' // recording requested with the grid on, counting in
   | 'recFirst' // recording the layer that defines the loop
   | 'playing'
   | 'overdub'
@@ -57,12 +64,22 @@ interface Pending {
 
 export class Looper {
   state: LooperState = 'empty'
-  /** Loop length in seconds, or null when the idea is empty. */
+  /**
+   * Current loop length in seconds (the length the next recording gets), or
+   * null when the idea is empty. Always `multiple × baseLength`.
+   */
   loopLength: number | null = null
+  /** Length of the first recording; every layer is a whole multiple of it. */
+  baseLength: number | null = null
   /** Absolute audio time corresponding to loop position 0 of the current playback. */
   loopStart = 0
   layers: Layer[] = []
   redoStack: Layer[] = []
+  /** Tempo grid, or null for free timing (no quantisation or bar features). */
+  grid: Grid | null
+  countInBars = 1
+  /** With the grid on, Stop just before a bar line keeps recording until this time. */
+  closingAt: number | null = null
 
   private nextId = 1
   private recording: Layer | null = null
@@ -70,10 +87,24 @@ export class Looper {
   private recordStart = 0
   private heldNotes = new Map<number, Pending>()
   private heldSustain: Pending | null = null
+  /** Notes pressed before this time (during a count-in) are ignored. */
+  private recordFrom = Number.NEGATIVE_INFINITY
   private sustainDown = false
   private listeners = new Set<() => void>()
 
-  constructor(public layerLimit = 16) {}
+  constructor(
+    public layerLimit = 16,
+    grid: Grid | null = null,
+  ) {
+    this.grid = grid
+  }
+
+  /** Grid changes are only allowed while the idea is empty (the tempo is fixed after recording). */
+  setGrid(grid: Grid | null) {
+    if (this.loopLength !== null || this.isRecording) return
+    this.grid = grid
+    this.emit()
+  }
 
   // --- observation -------------------------------------------------------
 
@@ -87,7 +118,7 @@ export class Looper {
   }
 
   get isRecording() {
-    return this.state === 'armed' || this.state === 'recFirst' || this.state === 'overdub'
+    return this.state === 'armed' || this.state === 'countIn' || this.state === 'recFirst' || this.state === 'overdub'
   }
 
   get isPlaying() {
@@ -125,12 +156,23 @@ export class Looper {
     if (!this.canRecord) return
     if (this.state === 'empty') {
       this.recording = this.newLayer(instrument)
-      this.state = 'armed'
+      if (this.grid) {
+        // Count in, then record from the first bar line (spec §6.1).
+        this.recordStart = now + this.countInBars * barSeconds(this.grid)
+        this.loopStart = this.recordStart
+        this.recordFrom = this.recordStart - beatSeconds(this.grid) / 2
+        this.state = this.countInBars > 0 ? 'countIn' : 'recFirst'
+      } else {
+        this.state = 'armed'
+      }
     } else if (this.state === 'playing') {
       this.startOverdub(instrument, now)
     } else if (this.state === 'stopped') {
-      this.loopStart = now
+      // Restart from the loop beginning, after a count-in when the grid is on.
+      const countIn = this.grid ? this.countInBars * barSeconds(this.grid) : 0
+      this.loopStart = now + countIn
       this.startOverdub(instrument, now)
+      if (this.grid) this.recordFrom = this.loopStart - beatSeconds(this.grid) / 2
     }
     this.emit()
   }
@@ -145,11 +187,26 @@ export class Looper {
   stop(now: number): void {
     switch (this.state) {
       case 'armed':
+      case 'countIn':
         this.discardRecording()
         this.state = 'empty'
         break
       case 'recFirst':
-        this.finishFirst(now)
+        if (this.closingAt !== null) return
+        if (this.grid) {
+          // Round to the nearest bar (spec §6.1): keep recording up to a bar
+          // line just ahead, or cut notes started after a bar line just passed.
+          const bar = barSeconds(this.grid)
+          const bars = Math.max(1, Math.round((now - this.recordStart) / bar))
+          const end = this.recordStart + bars * bar
+          if (end > now) {
+            this.closingAt = end
+            break
+          }
+          this.finishFirst(end)
+        } else {
+          this.finishFirst(now)
+        }
         break
       case 'overdub':
         this.commitRecording(now)
@@ -165,10 +222,11 @@ export class Looper {
   }
 
   cancel(): void {
-    if (this.state === 'armed' || this.state === 'recFirst') {
+    if (this.state === 'armed' || this.state === 'countIn' || this.state === 'recFirst') {
+      this.closingAt = null
       this.discardRecording()
       this.state = 'empty'
-      if (this.layers.length === 0 && this.redoStack.length === 0) this.loopLength = null
+      if (this.layers.length === 0 && this.redoStack.length === 0) this.resetLength()
     } else if (this.state === 'overdub') {
       this.discardRecording()
       this.state = 'playing'
@@ -180,8 +238,26 @@ export class Looper {
 
   /** Called periodically; enforces the first-recording time limit. */
   tick(now: number): void {
-    if (this.state === 'recFirst' && now - this.recordStart >= MAX_FIRST_RECORDING_SECONDS) {
-      this.stop(this.recordStart + MAX_FIRST_RECORDING_SECONDS)
+    if (this.state === 'countIn' && now >= this.recordStart) {
+      this.state = 'recFirst'
+      if (this.sustainDown && !this.heldSustain) this.heldSustain = { on: this.recordStart, velocity: 0 }
+      this.emit()
+    }
+    if (this.state === 'recFirst' && this.closingAt !== null && now >= this.closingAt) {
+      const end = this.closingAt
+      this.closingAt = null
+      this.finishFirst(end)
+      this.emit()
+      return
+    }
+    if (this.state === 'recFirst' && this.closingAt === null && now - this.recordStart >= MAX_FIRST_RECORDING_SECONDS) {
+      if (this.grid) {
+        const bar = barSeconds(this.grid)
+        this.finishFirst(this.recordStart + Math.floor(MAX_FIRST_RECORDING_SECONDS / bar) * bar)
+        this.emit()
+      } else {
+        this.stop(this.recordStart + MAX_FIRST_RECORDING_SECONDS)
+      }
     }
   }
 
@@ -196,8 +272,11 @@ export class Looper {
     }
     // A retrigger of a still-held pitch closes the previous one first.
     if (this.heldNotes.has(pitch)) this.noteOff(pitch, t)
-    if (this.state === 'recFirst' || this.state === 'overdub') {
-      this.heldNotes.set(pitch, { on: t, velocity })
+    const recording = this.state === 'countIn' || this.state === 'recFirst' || this.state === 'overdub'
+    if (recording && t >= this.recordFrom && (this.closingAt === null || t < this.closingAt)) {
+      // A note played a little early for the first beat counts as on the beat.
+      const beat1 = this.state === 'overdub' ? this.loopStart : this.recordStart
+      this.heldNotes.set(pitch, { on: Math.max(t, beat1), velocity })
     }
   }
 
@@ -218,7 +297,7 @@ export class Looper {
   sustain(down: boolean, t: number): void {
     this.sustainDown = down
     if (down) {
-      if (this.state === 'recFirst' || this.state === 'overdub') {
+      if ((this.state === 'recFirst' || this.state === 'overdub') && t >= this.recordFrom) {
         if (!this.heldSustain) this.heldSustain = { on: t, velocity: 0 }
       }
       return
@@ -260,14 +339,14 @@ export class Looper {
     this.layers.splice(i, 1)
     if (this.layers.length === 0 && !this.isRecording) {
       this.state = 'empty'
-      if (this.redoStack.length === 0) this.loopLength = null
+      if (this.redoStack.length === 0) this.resetLength()
     }
     this.emit()
   }
 
   // --- layer settings (not part of undo history) ---------------------------
 
-  updateLayer(id: number, patch: Partial<Pick<Layer, 'instrument' | 'volume' | 'muted' | 'solo'>>): void {
+  updateLayer(id: number, patch: Partial<Pick<Layer, 'instrument' | 'volume' | 'muted' | 'solo' | 'quantize'>>): void {
     const layer = this.layers.find((l) => l.id === id)
     if (!layer) return
     Object.assign(layer, patch)
@@ -280,23 +359,60 @@ export class Looper {
     return this.layers.filter((l) => !l.muted && (!anySolo || l.solo))
   }
 
-  // --- internals ---------------------------------------------------------------
+  /** Notes as they should sound: quantised when the layer asks for it and the idea has a grid. */
+  playbackNotes(layer: Layer): Note[] {
+    if (!layer.quantize.on || !this.grid) return layer.notes
+    return quantizeNotes(layer.notes, stepSeconds(this.grid, layer.quantize.grid), layer.length)
+  }
+
+  /** Number of base loops in the current loop length. */
+  get multiple(): number {
+    return this.loopLength && this.baseLength ? Math.round(this.loopLength / this.baseLength) : 1
+  }
+
+  get canExtend() {
+    return !this.isRecording && this.baseLength !== null
+  }
+
+  get canShrink() {
+    return this.canExtend && this.multiple > 1
+  }
+
+  /**
+   * Adds (or removes) one base loop to the length that the next recordings get.
+   * Existing layers keep their own length and keep repeating (spec §11).
+   */
+  extendLoop(delta: 1 | -1 = 1): void {
+    if (delta > 0 ? !this.canExtend : !this.canShrink) return
+    this.loopLength = (this.multiple + delta) * this.baseLength!
+    this.emit()
+  }
+
+  // --- internals -------------------------------------------------------------
+
+  private resetLength() {
+    this.loopLength = null
+    this.baseLength = null
+  }
 
   private newLayer(instrument: Instrument): Layer {
     return {
       id: this.nextId++,
+      length: 0,
       instrument,
       notes: [],
       sustain: [],
       volume: 1,
       muted: false,
       solo: false,
+      quantize: { on: false, grid: '1/16' },
     }
   }
 
   private startOverdub(instrument: Instrument, now: number) {
     this.recording = this.newLayer(instrument)
     this.recordStart = now
+    this.recordFrom = Number.NEGATIVE_INFINITY
     this.state = 'overdub'
     if (this.sustainDown) this.heldSustain = { on: now, velocity: 0 }
   }
@@ -306,13 +422,17 @@ export class Looper {
     if (length < MIN_LOOP_SECONDS) {
       this.discardRecording()
       this.state = 'empty'
-      if (this.layers.length === 0 && this.redoStack.length === 0) this.loopLength = null
+      if (this.layers.length === 0 && this.redoStack.length === 0) this.resetLength()
       return
     }
     // A new first recording replaces any redo history (rule 4).
     this.redoStack = []
     this.loopLength = length
+    this.baseLength = length
     this.loopStart = this.recordStart
+    // Notes started at or after the loop end (a late Stop) are dropped (spec §6.1).
+    if (this.recording) this.recording.notes = this.recording.notes.filter((n) => n.start < length - 1e-6)
+    for (const [pitch, held] of this.heldNotes) if (!held.committed && held.on >= now - 1e-6) this.heldNotes.delete(pitch)
     this.commitRecording(now)
     this.state = 'playing'
   }
@@ -333,13 +453,16 @@ export class Looper {
       layer.sustain.push(span)
       this.heldSustain.committed = { layer, item: span }
     }
-    layer.notes = mergeDuplicates(layer.notes, this.loopLength!)
+    layer.length = this.loopLength!
+    layer.notes = mergeDuplicates(layer.notes, layer.length)
+    if (this.grid) layer.quantize = { on: true, grid: guessQuantizeGrid(layer.notes, this.grid) }
     this.layers.push(layer)
     this.redoStack = []
   }
 
   private discardRecording() {
     this.recording = null
+    this.recordFrom = Number.NEGATIVE_INFINITY
     for (const [pitch, held] of this.heldNotes) {
       if (!held.committed) this.heldNotes.delete(pitch)
     }

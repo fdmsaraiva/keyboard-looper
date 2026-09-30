@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'preact/hooks'
 import type { Looper } from '../model/looper'
+import { barSeconds } from '../model/timing'
 
 export const LAYER_COLORS = ['#f59e0b', '#38bdf8', '#a78bfa', '#34d399', '#f472b6', '#facc15', '#60a5fa', '#fb7185']
 
@@ -31,7 +32,7 @@ export function LoopStrip({ looper, now, onTap }: { looper: Looper; now: () => n
       g.clearRect(0, 0, w, h)
       const len = looper.loopLength
       if (!len) {
-        if (looper.state === 'recFirst' || looper.state === 'armed') {
+        if (looper.state === 'recFirst' || looper.state === 'armed' || looper.state === 'countIn') {
           g.fillStyle = '#ef4444'
           g.globalAlpha = 0.25 + 0.2 * Math.sin(now() * 6)
           g.fillRect(0, 0, w, h)
@@ -43,18 +44,28 @@ export function LoopStrip({ looper, now, onTap }: { looper: Looper; now: () => n
       const lanes = Math.max(1, layers.length + (looper.recordingLayer ? 1 : 0))
       const laneH = h / lanes
       const audible = new Set(looper.audibleLayers().map((l) => l.id))
+      // Bar lines when the idea has a tempo grid.
+      if (looper.grid) {
+        const bar = barSeconds(looper.grid)
+        g.fillStyle = '#262c38'
+        for (let t = bar; t < len - 1e-6; t += bar) g.fillRect((t / len) * w, 0, 1, h)
+      }
       layers.forEach((layer, i) => {
         g.globalAlpha = audible.has(layer.id) ? 1 : 0.25
         g.fillStyle = layerColor(i)
-        const pitches = layer.notes.map((n) => n.pitch)
+        const notes = looper.playbackNotes(layer)
+        const pitches = notes.map((n) => n.pitch)
         const lo = Math.min(...pitches)
         const span = Math.max(1, Math.max(...pitches) - lo)
-        for (const n of layer.notes) {
-          const y = i * laneH + (1 - (n.pitch - lo) / span) * (laneH - 3)
-          const x = (n.start / len) * w
-          const nw = Math.max(2, (n.dur / len) * w)
-          g.fillRect(x, y, Math.min(nw, w - x), 2)
-          if (x + nw > w) g.fillRect(0, y, x + nw - w, 2) // wraps around the loop end
+        // A layer shorter than the loop repeats inside it.
+        for (let offset = 0; offset < len - 1e-6; offset += layer.length) {
+          for (const n of notes) {
+            const y = i * laneH + (1 - (n.pitch - lo) / span) * (laneH - 3)
+            const x = ((n.start + offset) % len) / len * w
+            const nw = Math.max(2, (n.dur / len) * w)
+            g.fillRect(x, y, Math.min(nw, w - x), 2)
+            if (x + nw > w) g.fillRect(0, y, x + nw - w, 2) // wraps around the loop end
+          }
         }
       })
       g.globalAlpha = 1

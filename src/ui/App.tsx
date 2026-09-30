@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks'
 import { AudioEngine, MAX_LAYERS } from '../audio/engine'
 import { type Instrument, type Layer, Looper } from '../model/looper'
+import { DEFAULT_GRID, QUANTIZE_GRIDS, type QuantizeGrid } from '../model/timing'
 import { baseForView, keyHints, MAX_BASE, MIN_BASE, useComputerKeyboard, useKeyLabels } from './computerKeyboard'
 import { InstrumentSelect, instrumentKey } from './InstrumentSelect'
 import { Keyboard } from './Keyboard'
 import { TOTAL_WHITES, whiteIndex } from './keys'
 import { LoopStrip, layerColor } from './LoopStrip'
 import { NavBar } from './NavBar'
+import { TimeBar } from './TimeBar'
 
 const SOUNDFONT_FILE = `${import.meta.env.BASE_URL}soundfonts/MuseScore_General.sf3`
 /** VITE_SOUNDFONT_PARTS > 0 loads the soundfont split into .part0, .part1… (see scripts/split-soundfont.mjs). */
@@ -24,7 +26,7 @@ const MIN_KEY_PX_MOUSE = 12
 type Phase = { kind: 'loading'; progress: number } | { kind: 'preparing' } | { kind: 'ready' } | { kind: 'running' } | { kind: 'error'; message: string }
 
 export function App() {
-  const looper = useMemo(() => new Looper(MAX_LAYERS), [])
+  const looper = useMemo(() => new Looper(MAX_LAYERS, { ...DEFAULT_GRID }), [])
   const engine = useMemo(() => new AudioEngine(looper), [looper])
   ;(window as unknown as { __engine: AudioEngine }).__engine = engine // prototype diagnostics
   const [, bump] = useReducer((n: number) => n + 1, 0)
@@ -179,7 +181,7 @@ export function App() {
       <div class="topbar">
         <button
           type="button"
-          class={`t rec${recording ? ' on' : ''}${s === 'armed' ? ' armed' : ''}`}
+          class={`t rec${recording ? ' on' : ''}${s === 'armed' || s === 'countIn' || looper.closingAt !== null ? ' armed' : ''}`}
           disabled={!looper.canRecord}
           onClick={() => looper.rec(instrument, engine.now)}
         >
@@ -188,7 +190,7 @@ export function App() {
         <button type="button" class="t" disabled={s !== 'stopped'} onClick={() => looper.play(engine.now)}>
           ▶ Play
         </button>
-        <button type="button" class="t" disabled={s === 'empty' || s === 'stopped'} onClick={() => looper.stop(engine.now)}>
+        <button type="button" class="t" disabled={s === 'empty' || s === 'stopped' || looper.closingAt !== null} onClick={() => looper.stop(engine.now)}>
           ■ Stop
         </button>
         {recording && (
@@ -207,12 +209,14 @@ export function App() {
         </button>
         <InstrumentSelect presets={engine.presets} value={instrument} onChange={chooseInstrument} />
         <span class="info">
-          {stateLabel(s)} · {looper.layers.length}/{MAX_LAYERS} layers
+          {looper.closingAt !== null ? 'Closing the loop at the bar line…' : stateLabel(s)} · {looper.layers.length}/{MAX_LAYERS} layers
           {looper.loopLength ? ` · ${looper.loopLength.toFixed(2)} s` : ''} · audio latency {lat.base}+{lat.output} ms{inputDelay !== null ? ` · touch→app ${inputDelay} ms` : ''} · voices{' '}
           {engine.voiceCount} · load {loadSeconds.toFixed(1)} s{mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1e6)} MB` : ''}
           {preparingNames.length > 0 && <strong class="preparing"> · Preparing {preparingNames.join(', ')}…</strong>}
         </span>
       </div>
+
+      <TimeBar looper={looper} engine={engine} rerender={rerender} />
 
       <LoopStrip looper={looper} now={now} onTap={() => setPanelOpen(!panelOpen)} />
 
@@ -287,6 +291,34 @@ function LayerRow({ layer, index, looper, engine }: { layer: Layer; index: numbe
       >
         S
       </button>
+      {looper.grid && (
+        <>
+          <button
+            type="button"
+            class={`small${layer.quantize.on ? ' on' : ''}`}
+            title="Quantize (the notes as played are kept)"
+            onClick={() => looper.updateLayer(layer.id, { quantize: { ...layer.quantize, on: !layer.quantize.on } })}
+          >
+            Q
+          </button>
+          <select
+            class="small-select"
+            value={layer.quantize.grid}
+            onChange={(e) =>
+              looper.updateLayer(layer.id, {
+                quantize: { on: true, grid: (e.currentTarget as HTMLSelectElement).value as QuantizeGrid },
+              })
+            }
+          >
+            {QUANTIZE_GRIDS.map((q) => (
+              <option key={q} value={q}>
+                {q}
+              </option>
+            ))}
+          </select>
+        </>
+      )}
+      <span class="len">×{looper.baseLength ? Math.round(layer.length / looper.baseLength) : 1}</span>
       <button type="button" class="small vol" onClick={() => setVolOpen(!volOpen)} title="Volume">
         {Math.round(layer.volume * 100)}
       </button>
@@ -333,6 +365,7 @@ function stateLabel(s: Looper['state']): string {
   return {
     empty: 'Empty',
     armed: 'Waiting for first note',
+    countIn: 'Count-in…',
     recFirst: 'Recording',
     playing: 'Playing',
     overdub: 'Overdubbing',

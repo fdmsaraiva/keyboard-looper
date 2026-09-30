@@ -4,6 +4,7 @@
 import { WorkletSynthesizer } from 'spessasynth_lib'
 import workletUrl from 'spessasynth_lib/dist/spessasynth_processor.min.js?url'
 import type { Instrument, Layer, Looper } from '../model/looper'
+import { beatSeconds } from '../model/timing'
 import type { DecoderRequest, DecoderResponse } from './decoder.worker'
 import { getCachedPreset, putCachedPreset } from './presetCache'
 
@@ -245,9 +246,74 @@ export class AudioEngine {
     this.synth.controllerChange(ch, CC_ALL_NOTES_OFF, 0)
   }
 
+  // --- metronome -------------------------------------------------------------
+
+  /** Click sound on/off; off leaves only the visual beat (spec §9). */
+  clickOn = true
+  clickVolume = 0.6
+  private clicksUntil = 0
+  private clickAnchor = Number.NaN
+
+  /** The metronome runs while counting in, recording and playing, whenever the idea has a grid. */
+  get metronomeRunning(): boolean {
+    const l = this.looper
+    return !!l.grid && (l.state === 'countIn' || l.state === 'recFirst' || l.isPlaying)
+  }
+
+  /** Current bar and beat (1-based) for the visual metronome, or null when not running. */
+  beatPosition(): { bar: number; beat: number; phase: number } | null {
+    const l = this.looper
+    if (!this.metronomeRunning || !l.grid) return null
+    const beat = beatSeconds(l.grid)
+    const k = Math.floor((this.now - l.loopStart) / beat)
+    const beats = l.grid.signature.beats
+    const inLoop = l.loopLength ? Math.round(l.loopLength / beat) : Number.POSITIVE_INFINITY
+    const kk = k >= 0 && Number.isFinite(inLoop) ? k % inLoop : k
+    return {
+      bar: Math.floor(kk / beats) + 1,
+      beat: (((kk % beats) + beats) % beats) + 1,
+      phase: (this.now - l.loopStart) / beat - k,
+    }
+  }
+
+  private scheduleClicks(now: number) {
+    const l = this.looper
+    if (!this.metronomeRunning || !l.grid) {
+      this.clickAnchor = Number.NaN
+      return
+    }
+    if (l.loopStart !== this.clickAnchor) {
+      this.clickAnchor = l.loopStart
+      this.clicksUntil = now
+    }
+    const beat = beatSeconds(l.grid)
+    const from = Math.max(this.clicksUntil, now)
+    const to = now + LOOKAHEAD
+    if (to <= from) return
+    for (let k = Math.ceil((from - l.loopStart) / beat); ; k++) {
+      const t = l.loopStart + k * beat
+      if (t >= to) break
+      if (this.clickOn) this.click(t, ((k % l.grid.signature.beats) + l.grid.signature.beats) % l.grid.signature.beats === 0)
+    }
+    this.clicksUntil = to
+  }
+
+  private click(time: number, accent: boolean) {
+    const osc = this.ctx.createOscillator()
+    const gain = this.ctx.createGain()
+    osc.frequency.value = accent ? 1760 : 1175
+    gain.gain.setValueAtTime(0, time)
+    gain.gain.linearRampToValueAtTime(this.clickVolume * (accent ? 0.5 : 0.3), time + 0.002)
+    gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.05)
+    osc.connect(gain).connect(this.ctx.destination)
+    osc.start(time)
+    osc.stop(time + 0.06)
+  }
+
   private tick() {
     const l = this.looper
     l.tick(this.now)
+    this.scheduleClicks(this.now)
     const playing = l.isPlaying && !!l.loopLength
     if (!playing) {
       if (this.wasPlaying) this.silenceAll()
@@ -259,7 +325,7 @@ export class AudioEngine {
       // Start from the beginning of the current cycle, even if it began a few
       // milliseconds before this tick (e.g. right when the first loop is closed),
       // so its first notes are not skipped. Earlier cycles were heard live.
-      const len = l.loopLength!
+      const len = l.baseLength ?? l.loopLength!
       const cycles = Math.max(0, Math.floor((now - l.loopStart) / len))
       this.scheduledUntil = l.loopStart + cycles * len
       this.lastLoopStart = l.loopStart
@@ -276,7 +342,7 @@ export class AudioEngine {
 
   private scheduleLayer(layer: Layer, from: number, to: number) {
     const l = this.looper
-    const len = l.loopLength!
+    const len = layer.length
     const ch = this.channelFor(layer)
     const vol = Math.round(layer.volume * FULL_VOLUME)
     if (this.channelVolume.get(ch) !== vol) {
@@ -293,7 +359,7 @@ export class AudioEngine {
         this.synth.controllerChange(ch, CC_SUSTAIN, 0, { time: t + s.dur })
       })
     }
-    for (const n of layer.notes) {
+    for (const n of l.playbackNotes(layer)) {
       occurrences(n.start, (t) => {
         this.synth.noteOn(ch, n.pitch, n.velocity, { time: t })
         this.synth.noteOff(ch, n.pitch, { time: t + n.dur })

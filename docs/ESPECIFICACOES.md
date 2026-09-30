@@ -44,11 +44,11 @@ Preço indicativo: pagamento único entre **5 € e 10 €**. O valor exacto fic
 |---|---|---|
 | Camadas por ideia | **Até 5** | **Sem limite**, até ao limite de estabilidade (a medir; espera-se entre 32 e 64) |
 | Mudar o andamento de uma ideia já gravada *(Q13a)* | — | ✔ |
-| Estender loop (×2) *(Q7, §10)* | — | ✔ |
 | Soundfonts próprias: carregar e usar até 3 por ideia *(Q5a, Q21)* | — | ✔ |
 | Teclado MIDI físico *(Q19)* | — | ✔ |
 | Exportação MIDI *(Q23)* | — | ✔ |
-| Tudo o resto: metrónomo, quantização, soundfont embutida com bateria, dois teclados, teclado do computador, atalhos, ideias ilimitadas, exportação de áudio, cópias de segurança | ✔ | ✔ |
+| Mover gravações no tempo, por compassos inteiros ou fracções de compasso (candidato; exige quantização) | — | ✔ |
+| Tudo o resto: metrónomo, quantização, multiplicador de loop, soundfont embutida com bateria, dois teclados, teclado do computador, atalhos, ideias ilimitadas, exportação de áudio, cópias de segurança | ✔ | ✔ |
 
 **Ideias com mais de 5 camadas numa versão grátis** (por exemplo, importadas ou restauradas de uma cópia feita com o Pro): a ideia abre e toca por inteiro, e as camadas podem ser silenciadas, ter o volume ajustado ou ser apagadas. **Não é possível gravar camadas novas** enquanto a ideia tiver 5 ou mais camadas visíveis. Uma mensagem explica que isso é uma função Pro.
 
@@ -108,7 +108,7 @@ Os botões são **Rec**, **Play** e **Stop**, mais **Cancel**, que só aparece d
 ### 6.2 Camadas seguintes (sobreposição)
 
 - A gravação começa **no instante** em que se carrega em Rec. Cada nota fica na posição do loop em que foi tocada *(Q8a)*.
-- **Todas as camadas têm a duração do loop** *(Q7)*. Tocar durante várias voltas **sobrepõe** tudo na mesma camada, como um pedal *(Q10)*.
+- **Cada camada fica com a duração actual do loop** no momento em que é gravada (ver §11), e repete-se com essa duração. Tocar durante várias voltas **sobrepõe** tudo na mesma camada, como um pedal *(Q10)*.
 - **Notas iguais no mesmo ponto** (mesma altura, a menos de cerca de 30 ms) **fundem-se numa só**, ficando a de maior intensidade *(Q10)*.
 - O **instrumento da nova camada** é o que está seleccionado no teclado quando se carrega em Rec *(Q6)*.
 
@@ -166,6 +166,8 @@ O histórico de undo e redo **fica guardado com a ideia** *(Q22b)*.
 
 ## 9. Metrónomo e andamento *(Q13)*
 
+**Decisão depois do protótipo:** a **grelha de tempo** (andamento e compasso) está **ligada por omissão** em todas as ideias. É dela que dependem a quantização, o arredondamento ao compasso e o futuro mover gravações no tempo. O **som** do metrónomo pode ser desligado sem perder nada, porque fica a indicação visual. Desligar a grelha é o **modo livre**, só possível com a ideia vazia e com um aviso de que a quantização e as funcionalidades de compasso deixam de estar disponíveis nessa ideia.
+
 | Tema | Decisão |
 |---|---|
 | Andamento (BPM) | Ajustável, com **tap tempo** |
@@ -187,7 +189,7 @@ O histórico de undo e redo **fica guardado com a ideia** *(Q22b)*.
 
 ## 10. Quantização *(Q11)*
 
-- **On/off por camada**, desligada por omissão.
+- **On/off por camada**, **ligada por omissão** em todas as camadas gravadas com a grelha de tempo (decisão depois do protótipo). Desligá-la não perde nada, porque as notas originais ficam guardadas.
 - **Reversível:** as notas originais ficam sempre guardadas, e a quantização é aplicada só na reprodução e na exportação.
 - **Correcção total:** quando está ligada, as notas vão exactamente para a grelha. Não há controlo de intensidade.
 - **Grelhas:** 1/4, 1/8, 1/16, 1/8 tercina e 1/16 tercina.
@@ -196,14 +198,17 @@ O histórico de undo e redo **fica guardado com a ideia** *(Q22b)*.
 
 ---
 
-## 11. Estender loop (Pro) *(Q7)*
+## 11. Multiplicador de loop (grátis) *(Q7, decisão depois do protótipo)*
 
-- Está disponível sempre que não esteja a decorrer uma gravação.
-- **É sempre ×2** e pode ser aplicado várias vezes seguidas, dando 2, 4, 8… vezes a duração original.
-- O conteúdo de **todas as camadas é copiado**, incluindo o das camadas à espera de redo. As notas que atravessavam o fim do loop passam a atravessar a fronteira entre as cópias sem se notar.
-- O andamento não muda. O loop passa a ter o dobro dos compassos.
-- A nova duração passa a ser a **duração base**, e as gravações seguintes têm essa duração.
-- **Não se desfaz com undo**, por isso pede confirmação. **Não há operação inversa** (encolher).
+Serve o caso típico: gravar uma linha de baixo curta e estender o loop para ter espaço para improvisar uma melodia por cima.
+
+- **A primeira gravação define a duração base.**
+- **+1 / −1** acrescentam ou retiram uma volta da duração base à **duração actual** (×1, ×2, ×3…, múltiplos livres). Está disponível sempre que não esteja a decorrer uma gravação.
+- **As camadas existentes não são copiadas nem alteradas.** Cada camada guarda a duração com que foi gravada e repete-se com ela. Por exemplo, um baixo de ×1 repete-se quatro vezes por baixo de uma melodia de ×4.
+- **A camada seguinte é gravada com a duração actual.** Pode voltar a estender-se mais tarde para acrescentar outra camada mais longa.
+- **Todas as camadas começam no mesmo ponto** (o início do loop). Com durações que não sejam múltiplas umas das outras (por exemplo ×2 e ×3), o conjunto só se repete por inteiro no mínimo múltiplo comum.
+- **−1 não encurta camadas já gravadas**; só afecta as gravações seguintes. Não vai abaixo de ×1.
+- O andamento não muda. Como não altera camadas, não precisa de confirmação nem de undo.
 
 ---
 
@@ -328,7 +333,6 @@ O histórico de undo e redo **fica guardado com a ideia** *(Q22b)*.
 
 - Gravação por microfone ou camadas de áudio *(Q24)*.
 - Instrumentos diferentes em cada um dos dois teclados *(Q17b)*.
-- Camadas com durações diferentes na mesma ideia. O "Estender loop" substitui esta funcionalidade.
 - Edição de notas (piano roll). A visualização é só para ver.
 - Compassos para além de 2/4, 3/4, 4/4 e 6/8.
 - Sincronização na nuvem e contas de utilizador.

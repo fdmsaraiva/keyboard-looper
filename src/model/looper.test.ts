@@ -268,3 +268,121 @@ describe('mergeDuplicates', () => {
     expect(merged[0].velocity).toBe(80)
   })
 })
+
+describe('with the tempo grid (spec §6.1, §10, §11)', () => {
+  // 120 bpm 4/4 → beat 0.5 s, bar 2 s
+  const grid = { bpm: 120, signature: { beats: 4 as const, unit: 4 as const } }
+  const gridLooper = () => new Looper(16, grid)
+
+  it('counts in one bar, then records from the bar line', () => {
+    const l = gridLooper()
+    l.rec(piano, 10)
+    expect(l.state).toBe('countIn')
+    l.noteOn(60, 100, 10.5) // during count-in: ignored
+    l.noteOff(60, 10.6)
+    l.noteOn(62, 100, 11.9) // slightly early for beat 1: counts as beat 1
+    l.tick(12)
+    expect(l.state).toBe('recFirst')
+    l.noteOff(62, 12.3)
+    l.stop(15.8) // just before the end of bar 2 → keeps recording until 16
+    expect(l.state).toBe('recFirst')
+    expect(l.closingAt).toBe(16)
+    l.tick(16)
+    expect(l.state).toBe('playing')
+    expect(l.loopLength).toBe(4)
+    expect(l.layers[0].notes).toHaveLength(1)
+    expect(l.layers[0].notes[0]).toMatchObject({ pitch: 62, start: 0 })
+  })
+
+  it('a late Stop cuts the loop at the bar line and drops notes started after it', () => {
+    const l = gridLooper()
+    l.countInBars = 0
+    l.rec(piano, 0)
+    expect(l.state).toBe('recFirst')
+    l.noteOn(60, 100, 0.1)
+    l.noteOff(60, 0.3)
+    l.noteOn(64, 100, 2.05) // after the bar line
+    l.noteOff(64, 2.1)
+    l.stop(2.2)
+    expect(l.loopLength).toBe(2)
+    expect(l.layers[0].notes.map((n) => n.pitch)).toEqual([60])
+  })
+
+  it('turns quantisation on for new layers with a guessed grid', () => {
+    const l = gridLooper()
+    l.countInBars = 0
+    l.rec(piano, 0)
+    for (const t of [0.02, 0.51, 0.98, 1.52]) {
+      l.noteOn(60, 100, t)
+      l.noteOff(60, t + 0.1)
+    }
+    l.stop(2)
+    expect(l.layers[0].quantize).toEqual({ on: true, grid: '1/4' })
+    expect(l.playbackNotes(l.layers[0]).map((n) => n.start)).toEqual([0, 0.5, 1, 1.5])
+    l.updateLayer(l.layers[0].id, { quantize: { on: false, grid: '1/4' } })
+    expect(l.playbackNotes(l.layers[0])[0].start).toBeCloseTo(0.02)
+  })
+
+  it('rec from stopped counts in before the loop restarts', () => {
+    const l = gridLooper()
+    l.countInBars = 0
+    l.rec(piano, 0)
+    l.noteOn(60, 100, 0.1)
+    l.noteOff(60, 0.2)
+    l.stop(2)
+    l.stop(3) // stop playback
+    l.countInBars = 1
+    l.rec(bass, 10)
+    expect(l.loopStart).toBe(12)
+    l.noteOn(40, 100, 10.5) // count-in: ignored
+    l.noteOff(40, 10.6)
+    l.noteOn(41, 100, 12.5)
+    l.noteOff(41, 12.6)
+    l.stop(13)
+    expect(l.layers[1].notes.map((n) => n.pitch)).toEqual([41])
+  })
+
+  it('grid changes only while the idea is empty', () => {
+    const l = gridLooper()
+    l.countInBars = 0
+    l.rec(piano, 0)
+    l.noteOn(60, 100, 0.1)
+    l.stop(2)
+    l.setGrid({ bpm: 90, signature: grid.signature })
+    expect(l.grid?.bpm).toBe(120)
+  })
+})
+
+describe('extendLoop (per-layer lengths, spec §11)', () => {
+  it('adds base loops for the next recordings; existing layers keep their length', () => {
+    const l = withFirstLayer(2) // bass, 2 s
+    l.extendLoop()
+    l.extendLoop()
+    expect(l.multiple).toBe(3)
+    expect(l.loopLength).toBe(6)
+    expect(l.layers[0].length).toBe(2)
+    expect(l.layers[0].notes).toHaveLength(1) // not copied
+    l.rec(bass, 20)
+    l.noteOn(64, 90, 25) // 15 s after the loop start → 3 s into the 6 s loop
+    l.noteOff(64, 25.2)
+    l.stop(26)
+    expect(l.layers[1].length).toBe(6)
+    expect(l.layers[1].notes[0].start).toBeCloseTo(3)
+  })
+
+  it('shrinks back down to one base loop but never below', () => {
+    const l = withFirstLayer(2)
+    l.extendLoop()
+    l.extendLoop(-1)
+    expect(l.loopLength).toBe(2)
+    expect(l.canShrink).toBe(false)
+    l.extendLoop(-1)
+    expect(l.loopLength).toBe(2)
+  })
+
+  it('is not available while recording', () => {
+    const l = withFirstLayer(2)
+    l.rec(bass, 12)
+    expect(l.canExtend).toBe(false)
+  })
+})
