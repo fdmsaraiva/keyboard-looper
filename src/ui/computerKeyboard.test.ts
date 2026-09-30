@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { pitchForCode } from './computerKeyboard'
+import { baseForView, pitchForCode } from './computerKeyboard'
+import { whiteIndex } from './keys'
 
 describe('pitchForCode', () => {
   it('maps the lower row from the base C', () => {
@@ -18,5 +19,14 @@ describe('pitchForCode', () => {
   it('ignores unmapped keys and pitches outside the piano', () => {
     expect(pitchForCode('KeyA', 48)).toBeNull()
     expect(pitchForCode('KeyP', 96)).toBeNull() // above C8
+  })
+})
+
+describe('baseForView', () => {
+  it('uses the lowest fully visible C', () => {
+    expect(baseForView(whiteIndex(48))).toBe(48) // view starts exactly on C3
+    expect(baseForView(whiteIndex(48) + 0.5)).toBe(60) // C3 half cut off → C4
+    expect(baseForView(whiteIndex(50))).toBe(60) // view starts on D3
+    expect(baseForView(0)).toBe(24) // A0: first C is C1
   })
 })

@@ -257,7 +257,7 @@ O histórico de undo e redo **fica guardado com a ideia** *(Q22b)*.
 
 ## 15. Entrada externa *(Q19)*
 
-- **Teclado do computador (grátis):** duas filas de letras funcionam como teclas de piano, com teclas para mudar de oitava.
+- **Teclado do computador (grátis):** duas filas de letras funcionam como teclas de piano, com mapeamento fixo: Z e Q são sempre Dós, com a fila de cima uma oitava acima. A oitava acompanha o teclado no ecrã: **Z toca o Dó mais baixo visível** e Q o seguinte. ← / → deslocam o teclado no ecrã uma oitava.
 - **Atalhos dos controlos (grátis)** *(Q19b)*. Proposta:
 
 | Tecla | Função |

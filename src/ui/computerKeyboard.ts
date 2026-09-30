@@ -3,9 +3,11 @@
 //
 //   lower octave:  Z S X D C V G B H N J M ,     →  C … C (base octave)
 //   upper octave:  Q 2 W 3 E R 5 T 6 Y 7 U I 9 O 0 P  →  C … E (base + 1)
+//
+// The base follows the on-screen keyboard: Z is the lowest C fully visible.
 
 import { useEffect, useRef } from 'preact/hooks'
-import { HIGHEST, LOWEST } from './keys'
+import { HIGHEST, LOWEST, whiteIndex } from './keys'
 
 const LOWER_ROW = ['KeyZ', 'KeyS', 'KeyX', 'KeyD', 'KeyC', 'KeyV', 'KeyG', 'KeyB', 'KeyH', 'KeyN', 'KeyJ', 'KeyM', 'Comma']
 const UPPER_ROW = ['KeyQ', 'Digit2', 'KeyW', 'Digit3', 'KeyE', 'KeyR', 'Digit5', 'KeyT', 'Digit6', 'KeyY', 'Digit7', 'KeyU', 'KeyI', 'Digit9', 'KeyO', 'Digit0', 'KeyP']
@@ -25,6 +27,14 @@ export function keyHints(base: number): Record<number, string> {
 export const MIN_BASE = 24 // C1
 export const MAX_BASE = 96 // C7
 
+/** The C that Z plays: the lowest C whose key is fully visible from `startWhite`. */
+export function baseForView(startWhite: number): number {
+  for (let c = MIN_BASE; c <= MAX_BASE; c += 12) {
+    if (whiteIndex(c) >= startWhite - 0.01) return c
+  }
+  return MAX_BASE
+}
+
 /** MIDI pitch for a key code with the lower row starting at `base` (a C), or null. */
 export function pitchForCode(code: string, base: number): number | null {
   let offset = LOWER_ROW.indexOf(code)
@@ -40,8 +50,8 @@ export function pitchForCode(code: string, base: number): number | null {
 export interface ComputerKeyboardActions {
   noteOn: (pitch: number, velocity: number) => void
   noteOff: (pitch: number) => void
-  /** Called with the new base when ←/→ shift the octave. */
-  octave: (base: number) => void
+  /** ←/→: move the on-screen keyboard (and so the computer keys) an octave down/up. */
+  octave: (direction: -1 | 1) => void
   rec: () => void
   playStop: () => void
   cancel: () => void
@@ -99,8 +109,8 @@ export function useComputerKeyboard(enabled: boolean, base: number, actions: Com
         Space: a.playStop,
         Escape: a.cancel,
         Tab: a.sustain,
-        ArrowLeft: () => a.octave(Math.max(MIN_BASE, b - 12)),
-        ArrowRight: () => a.octave(Math.min(MAX_BASE, b + 12)),
+        ArrowLeft: () => a.octave(-1),
+        ArrowRight: () => a.octave(1),
       }
       const fn = shortcut[e.code]
       if (!fn) return

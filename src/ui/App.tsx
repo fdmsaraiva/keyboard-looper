@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'preact/hooks'
 import { AudioEngine, MAX_LAYERS } from '../audio/engine'
 import { type Instrument, type Layer, Looper } from '../model/looper'
-import { keyHints, useComputerKeyboard } from './computerKeyboard'
+import { baseForView, keyHints, MAX_BASE, MIN_BASE, useComputerKeyboard } from './computerKeyboard'
 import { InstrumentSelect, instrumentKey } from './InstrumentSelect'
 import { Keyboard } from './Keyboard'
 import { TOTAL_WHITES, whiteIndex } from './keys'
@@ -36,7 +36,6 @@ export function App() {
   const [view, setView] = useState({ start: whiteIndex(48), whites: 15 }) // C3 upward, ~2 octaves
   const [maxWhites, setMaxWhites] = useState(TOTAL_WHITES)
   const [loadSeconds, setLoadSeconds] = useState(0)
-  const [kbBase, setKbBase] = useState(48) // computer keyboard lower row starts at C3
   const [kbDown, setKbDown] = useState<ReadonlySet<number>>(new Set())
   const finePointer = useMemo(() => matchMedia('(pointer: fine)').matches, [])
 
@@ -109,6 +108,8 @@ export function App() {
     engine.liveSustain(next)
   }
 
+  // Z plays the lowest C visible on screen (spec §15).
+  const kbBase = baseForView(view.start)
   useComputerKeyboard(phase.kind === 'running', kbBase, {
     noteOn: (p, v) => {
       engine.liveNoteOn(p, v)
@@ -122,15 +123,10 @@ export function App() {
         return next
       })
     },
-    octave: (base) => {
-      setKbBase(base)
-      // Bring the two computer-keyboard octaves into view.
-      setView((v) => {
-        const lo = whiteIndex(base)
-        const hi = whiteIndex(Math.min(108, base + 24))
-        if (lo >= v.start && hi <= v.start + v.whites) return v
-        return { ...v, start: Math.max(0, Math.min(TOTAL_WHITES - v.whites, lo)) }
-      })
+    octave: (direction) => {
+      // Scroll so the next C down/up becomes the leftmost key.
+      const target = Math.min(MAX_BASE, Math.max(MIN_BASE, kbBase + 12 * direction))
+      setView((v) => ({ ...v, start: Math.max(0, Math.min(TOTAL_WHITES - v.whites, whiteIndex(target))) }))
     },
     rec: () => looper.rec(instrument, engine.now),
     playStop: () => (looper.state === 'stopped' ? looper.play(engine.now) : looper.stop(engine.now)),
@@ -237,7 +233,7 @@ export function App() {
       />
       {finePointer && (
         <div class="kb-help">
-          Computer keys: Z–M and Q–P play · ←/→ octave · Enter Rec · Space Play/Stop · Esc Cancel · Tab Sustain · Ctrl+Z / Ctrl+Shift+Z
+          Computer keys: Z = lowest C on screen, Z–M and Q–P play · ←/→ scroll an octave · Enter Rec · Space Play/Stop · Esc Cancel · Tab Sustain · Ctrl+Z / Ctrl+Shift+Z
           undo/redo rec
         </div>
       )}
