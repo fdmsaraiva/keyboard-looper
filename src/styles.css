@@ -395,3 +395,8 @@ select.instrument {
   color: var(--sus);
   font-size: 12px;
 }
+
+.bad {
+  color: var(--rec);
+  font-weight: 700;
+}

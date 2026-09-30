@@ -1,3 +1,4 @@
+import { memo } from 'preact/compat'
 import type { Preset } from '../audio/engine'
 import type { Instrument } from '../model/looper'
 
@@ -15,7 +16,8 @@ const QUICK: { label: string; drums: boolean; program: number }[] = [
   { label: 'Synth Pad', drums: false, program: 89 },
 ]
 
-export function InstrumentSelect({
+/** Memoised: the lists have ~300 options and must not be rebuilt on unrelated redraws. */
+export const InstrumentSelect = memo(function InstrumentSelect({
   presets,
   value,
   onChange,
@@ -65,4 +67,7 @@ export function InstrumentSelect({
       </optgroup>
     </select>
   )
-}
+},
+// onChange handlers are recreated on every parent redraw but do the same thing,
+// so only the preset list and the selected instrument decide a redraw.
+(a, b) => a.presets === b.presets && instrumentKey(a.value) === instrumentKey(b.value))

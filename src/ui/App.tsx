@@ -77,12 +77,6 @@ export function App() {
     return () => window.removeEventListener('resize', update)
   }, [])
 
-  // Keep the info line (latency, voices, memory) fresh.
-  useEffect(() => {
-    const id = setInterval(rerender, 500)
-    return () => clearInterval(id)
-  }, [])
-
   const start = async () => {
     await engine.resume()
     engine.setLiveInstrument(instrument)
@@ -171,10 +165,6 @@ export function App() {
 
   const s = looper.state
   const recording = looper.isRecording
-  const lat = engine.latencyMs
-  const inputDelay = engine.inputDelayMs
-  const preparingNames = engine.presets.filter((p) => engine.preparing.has(instrumentKey(p))).map((p) => p.name)
-  const mem = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory
 
   return (
     <div class="app">
@@ -208,12 +198,7 @@ export function App() {
           Sustain
         </button>
         <InstrumentSelect presets={engine.presets} value={instrument} onChange={chooseInstrument} />
-        <span class="info">
-          {looper.closingAt !== null ? 'Closing the loop at the bar line…' : stateLabel(s)} · {looper.layers.length}/{MAX_LAYERS} layers
-          {looper.loopLength ? ` · ${looper.loopLength.toFixed(2)} s` : ''} · audio latency {lat.base}+{lat.output} ms{inputDelay !== null ? ` · touch→app ${inputDelay} ms` : ''} · voices{' '}
-          {engine.voiceCount} · load {loadSeconds.toFixed(1)} s{mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1e6)} MB` : ''}
-          {preparingNames.length > 0 && <strong class="preparing"> · Preparing {preparingNames.join(', ')}…</strong>}
-        </span>
+        <InfoLine looper={looper} engine={engine} loadSeconds={loadSeconds} />
       </div>
 
       <TimeBar looper={looper} engine={engine} rerender={rerender} />
@@ -371,4 +356,34 @@ function stateLabel(s: Looper['state']): string {
     overdub: 'Overdubbing',
     stopped: 'Stopped',
   }[s]
+}
+
+/**
+ * Status and diagnostics, refreshed on its own twice a second so the rest of
+ * the app (instrument lists, keyboard) is not redrawn just to update numbers.
+ */
+function InfoLine({ looper, engine, loadSeconds }: { looper: Looper; engine: AudioEngine; loadSeconds: number }) {
+  const [, bump] = useReducer((n: number) => n + 1, 0)
+  useEffect(() => {
+    const id = setInterval(() => bump(undefined), 500)
+    return () => clearInterval(id)
+  }, [])
+  const lat = engine.latencyMs
+  const inputDelay = engine.inputDelayMs
+  const preparingNames = engine.presets.filter((p) => engine.preparing.has(instrumentKey(p))).map((p) => p.name)
+  const mem = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory
+  const gap = engine.maxTickGapMs
+  return (
+    <span class="info">
+      {looper.closingAt !== null ? 'Closing the loop at the bar line…' : stateLabel(looper.state)} · {looper.layers.length}/{MAX_LAYERS} layers
+      {looper.loopLength ? ` · ${looper.loopLength.toFixed(2)} s` : ''} · audio latency {lat.base}+{lat.output} ms
+      {inputDelay !== null ? ` · touch→app ${inputDelay} ms` : ''} · voices {engine.voiceCount} · load {loadSeconds.toFixed(1)} s
+      {mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1e6)} MB` : ''}
+      {' · '}
+      <span class={gap > 150 ? 'bad' : ''} title="Longest pause of the sound scheduler in the last 5 s; above ~200 ms sounds can be skipped">
+        max gap {gap} ms
+      </span>
+      {preparingNames.length > 0 && <strong class="preparing"> · Preparing {preparingNames.join(', ')}…</strong>}
+    </span>
+  )
 }

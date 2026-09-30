@@ -12,7 +12,9 @@ const LIVE_CHANNEL = 0
 /** Channel 0 is the live keyboard; each layer gets one of the remaining 15. */
 export const MAX_LAYERS = 15
 /** How far ahead (seconds) recorded events are handed to the synthesizer. */
-const LOOKAHEAD = 0.12
+const LOOKAHEAD = 0.2
+/** A click up to this late is still played (it was due between two ticks). */
+const CLICK_GRACE = 0.05
 const TICK_MS = 25
 const CC_BANK = 0
 const CC_VOLUME = 7
@@ -283,11 +285,13 @@ export class AudioEngine {
       return
     }
     if (l.loopStart !== this.clickAnchor) {
+      // The first count-in click is due the instant Rec is pressed, which is
+      // already slightly in the past by the time this tick runs.
       this.clickAnchor = l.loopStart
-      this.clicksUntil = now
+      this.clicksUntil = now - CLICK_GRACE
     }
     const beat = beatSeconds(l.grid)
-    const from = Math.max(this.clicksUntil, now)
+    const from = Math.max(this.clicksUntil, now - CLICK_GRACE)
     const to = now + LOOKAHEAD
     if (to <= from) return
     for (let k = Math.ceil((from - l.loopStart) / beat); ; k++) {
@@ -310,7 +314,25 @@ export class AudioEngine {
     osc.stop(time + 0.06)
   }
 
+  /** Longest gap between scheduler ticks in the last few seconds (ms), for diagnostics. */
+  maxTickGapMs = 0
+  private lastTickAt = 0
+  private gapWindowStart = 0
+  private gapWindowMax = 0
+
+  private measureTickGap() {
+    const t = performance.now()
+    if (this.lastTickAt) this.gapWindowMax = Math.max(this.gapWindowMax, t - this.lastTickAt)
+    this.lastTickAt = t
+    if (t - this.gapWindowStart > 5000) {
+      this.maxTickGapMs = Math.round(this.gapWindowMax)
+      this.gapWindowMax = 0
+      this.gapWindowStart = t
+    }
+  }
+
   private tick() {
+    this.measureTickGap()
     const l = this.looper
     l.tick(this.now)
     this.scheduleClicks(this.now)
